@@ -17,5 +17,6 @@ export function databaseOptions(): PostgresConnectionOptions {
     migrations: [__dirname + '/migrations/*{.ts,.js}'],
     synchronize: false,
     logging: process.env.DB_LOGGING === 'true',
+    ssl: process.env.PGSSLMODE === 'require',
   };
 }

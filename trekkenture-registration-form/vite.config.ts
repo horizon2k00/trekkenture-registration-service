@@ -10,4 +10,5 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './test/setup.ts',
   },
+  base: '/registration/'
 });
