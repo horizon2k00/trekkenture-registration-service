@@ -1,76 +1,46 @@
-import {
-  Controller,
-  Post,
-  Body,
-  ValidationPipe,
-  HttpCode,
-  HttpStatus,
-} from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
-import { SubmissionsService } from './submissions.service';
+import { Body, Controller, Logger, Param, Post } from '@nestjs/common';
 import { CreateSubmissionDto } from '../dto/submission.dto';
 import { EmailService } from '../email/email.service';
+import { SubmissionsService } from './submissions.service';
 
-@ApiTags('Submissions')
-@Controller('submissions')
+@Controller('forms')
 export class SubmissionsController {
+  private readonly logger = new Logger(SubmissionsController.name);
+
   constructor(
     private readonly submissionsService: SubmissionsService,
     private readonly emailService: EmailService,
   ) {}
 
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Submit event registration',
-    description:
-      'Creates a new registration submission for an event. A confirmation email will be sent to the provided email address.',
-  })
-  @ApiBody({ type: CreateSubmissionDto })
-  @ApiResponse({
-    status: 201,
-    description: 'Registration submitted successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        message: {
-          type: 'string',
-          example: 'Submission received successfully',
-        },
-        submissionId: {
-          type: 'string',
-          format: 'uuid',
-          example: '123e4567-e89b-12d3-a456-426614174000',
-        },
-      },
-    },
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Bad request - Invalid input data or missing required fields',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Event not found',
-  })
-  async create(@Body(ValidationPipe) createSubmissionDto: CreateSubmissionDto) {
-    const submission =
-      await this.submissionsService.create(createSubmissionDto);
-
-    // Send confirmation email asynchronously
-    this.emailService
-      .sendThankYouEmail(
-        createSubmissionDto.email,
-        createSubmissionDto.formData,
-      )
-      .catch((error) => {
-        console.error('Failed to send email:', error);
-        // Don't fail the request if email fails
-      });
-
+  @Post(':slug/submissions')
+  async create(@Param('slug') slug: string, @Body() dto: CreateSubmissionDto) {
+    const { submission, event } = await this.submissionsService.createBySlug(
+      slug,
+      dto,
+    );
+    const recipient = String(
+      submission.answers['parent.primaryEmail'] ??
+        submission.answers['student.email'] ??
+        '',
+    );
+    if (recipient && this.emailService.configured) {
+      const name = String(
+        submission.answers['student.fullName'] ??
+          submission.answers['parent.primaryName'] ??
+          'Participant',
+      );
+      void this.emailService
+        .sendThankYouEmail(recipient, name, event.name)
+        .catch(() =>
+          this.logger.error(
+            `Confirmation email failed for submission ${submission.id}`,
+          ),
+        );
+    }
     return {
       message: 'Submission received successfully',
       submissionId: submission.id,
+      submittedAt: submission.submittedAt,
     };
   }
 }

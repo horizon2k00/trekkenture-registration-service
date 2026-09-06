@@ -1,14 +1,17 @@
 import {
-  Entity,
-  PrimaryGeneratedColumn,
   Column,
-  ManyToOne,
-  JoinColumn,
   CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Event } from './event.entity';
+import { Answer } from '../questions/question-types';
 
 @Entity('submissions')
+@Index(['eventId', 'submittedAt'])
 export class Submission {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -21,8 +24,9 @@ export class Submission {
   event: Event;
 
   @Column({ type: 'jsonb' })
-  formData: Record<string, any>;
+  // Retain old array answers for reading/exporting; new answers are scalar only.
+  answers: Record<string, Answer | string[]>;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   submittedAt: Date;
 }

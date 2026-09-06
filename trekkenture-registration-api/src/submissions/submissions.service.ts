@@ -1,47 +1,65 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  GoneException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Submission } from '../entities/submission.entity';
-import { Event } from '../entities/event.entity';
+import { DataSource, Repository } from 'typeorm';
 import { CreateSubmissionDto } from '../dto/submission.dto';
+import { Event, EventStatus } from '../entities/event.entity';
+import { Submission } from '../entities/submission.entity';
+import { validateAnswers } from './validate-answers';
 
 @Injectable()
 export class SubmissionsService {
+  private readonly logger = new Logger(SubmissionsService.name);
+
   constructor(
     @InjectRepository(Submission)
-    private submissionsRepository: Repository<Submission>,
+    private readonly submissionsRepository: Repository<Submission>,
     @InjectRepository(Event)
-    private eventsRepository: Repository<Event>,
+    private readonly eventsRepository: Repository<Event>,
+    private readonly dataSource: DataSource,
   ) {}
 
-  async create(createSubmissionDto: CreateSubmissionDto): Promise<Submission> {
-    // Verify event exists
-    const event = await this.eventsRepository.findOne({
-      where: { id: createSubmissionDto.eventId },
-    });
-
-    if (!event) {
-      throw new NotFoundException(
-        `Event with ID '${createSubmissionDto.eventId}' not found`,
+  async createBySlug(
+    slug: string,
+    dto: CreateSubmissionDto,
+  ): Promise<{ submission: Submission; event: Event }> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      // Lock the form row so closing a form and accepting a response cannot race.
+      const event = await manager
+        .getRepository(Event)
+        .createQueryBuilder('event')
+        .setLock('pessimistic_write')
+        .where('event.slug = :slug', { slug })
+        .getOne();
+      if (!event) throw new NotFoundException('Registration form not found');
+      if (event.status !== EventStatus.PUBLISHED) {
+        throw new GoneException('This form is not accepting responses');
+      }
+      const answers = validateAnswers(event.questions, dto.answers);
+      const submission = await manager.getRepository(Submission).save(
+        manager.getRepository(Submission).create({
+          eventId: event.id,
+          answers,
+        }),
       );
-    }
-
-    const submission = this.submissionsRepository.create({
-      eventId: createSubmissionDto.eventId,
-      formData: createSubmissionDto.formData,
+      return { submission, event };
     });
-
-    return this.submissionsRepository.save(submission);
-  }
-
-  async findAll(): Promise<Submission[]> {
-    return this.submissionsRepository.find({
-      relations: ['event'],
-      order: { submittedAt: 'DESC' },
-    });
+    this.logger.log(
+      `Stored submission ${result.submission.id} for form ${result.event.id}`,
+    );
+    return result;
   }
 
   async findByEvent(eventId: string): Promise<Submission[]> {
+    const exists = await this.eventsRepository.exist({
+      where: { id: eventId },
+    });
+    if (!exists)
+      throw new NotFoundException(`Form with ID '${eventId}' not found`);
     return this.submissionsRepository.find({
       where: { eventId },
       order: { submittedAt: 'DESC' },

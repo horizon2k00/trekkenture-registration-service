@@ -1,192 +1,96 @@
 import {
-  Controller,
-  Get,
-  Post,
   Body,
-  Patch,
-  Param,
+  Controller,
   Delete,
-  UseGuards,
-  ValidationPipe,
+  Get,
   HttpCode,
-  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
   StreamableFile,
+  UseGuards,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiParam,
-  ApiBearerAuth,
-  ApiBody,
-} from '@nestjs/swagger';
-import { EventsService } from './events.service';
-import { CreateEventDto, UpdateEventDto } from '../dto/event.dto';
+import { SaveFormDto } from '../dto/event.dto';
+import { EventStatus } from '../entities/event.entity';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { SubmissionsService } from '../submissions/submissions.service';
+import { EventsService } from './events.service';
 import { ReportingService } from './reporting.service';
 
-@ApiTags('Events')
-@Controller('events')
-export class EventsController {
+@UseGuards(JwtAuthGuard)
+@Controller('admin/forms')
+export class AdminFormsController {
   constructor(
     private readonly eventsService: EventsService,
+    private readonly submissionsService: SubmissionsService,
     private readonly reportingService: ReportingService,
   ) {}
 
-  @Post()
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('JWT-auth')
-  @ApiOperation({
-    summary: 'Create a new event',
-    description:
-      'Creates a new trekking/adventure event with form configuration and payment details',
-  })
-  @ApiBody({ type: CreateEventDto })
-  @ApiResponse({
-    status: 201,
-    description: 'Event created successfully',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - JWT token missing or invalid',
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Bad request - Invalid input data',
-  })
-  create(@Body(ValidationPipe) createEventDto: CreateEventDto) {
-    return this.eventsService.create(createEventDto);
-  }
-
   @Get()
-  @ApiOperation({
-    summary: 'Get all events',
-    description: 'Retrieves a list of all available events',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'List of events retrieved successfully',
-  })
-  findAll() {
-    return this.eventsService.findAll();
+  findAll(@Query('status') status?: EventStatus) {
+    return this.eventsService.findAll(status);
   }
 
-  @Get(':slug')
-  @ApiOperation({
-    summary: 'Get event by slug',
-    description: 'Retrieves a specific event by its URL-friendly slug',
-  })
-  @ApiParam({
-    name: 'slug',
-    description: 'URL-friendly event identifier (e.g., "summer-trek-2026")',
-    example: 'summer-trek-2026',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Event found and returned successfully',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Event not found',
-  })
-  findBySlug(@Param('slug') slug: string) {
-    return this.eventsService.findBySlug(slug);
+  @Post()
+  create(@Body() dto: SaveFormDto) {
+    return this.eventsService.create(dto);
+  }
+
+  @Get(':id/submissions/export')
+  export(@Param('id', ParseUUIDPipe) id: string): Promise<StreamableFile> {
+    return this.reportingService.exportEventSubmissions(id);
+  }
+
+  @Get(':id/submissions')
+  submissions(@Param('id', ParseUUIDPipe) id: string) {
+    return this.submissionsService.findByEvent(id);
+  }
+
+  @Post(':id/publish')
+  publish(@Param('id', ParseUUIDPipe) id: string) {
+    return this.eventsService.publish(id);
+  }
+
+  @Post(':id/close')
+  close(@Param('id', ParseUUIDPipe) id: string) {
+    return this.eventsService.close(id);
+  }
+
+  @Post(':id/reopen')
+  reopen(@Param('id', ParseUUIDPipe) id: string) {
+    return this.eventsService.reopen(id);
+  }
+
+  @Get('payment-settings')
+  paymentSettings() {
+    return this.eventsService.getPaymentSettings();
+  }
+
+  @Get(':id')
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.eventsService.findOne(id);
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('JWT-auth')
-  @ApiOperation({
-    summary: 'Update an event',
-    description: 'Updates an existing event with partial data',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Event UUID',
-    example: '123e4567-e89b-12d3-a456-426614174000',
-  })
-  @ApiBody({ type: UpdateEventDto })
-  @ApiResponse({
-    status: 200,
-    description: 'Event updated successfully',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - JWT token missing or invalid',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Event not found',
-  })
-  update(
-    @Param('id') id: string,
-    @Body(ValidationPipe) updateEventDto: UpdateEventDto,
-  ) {
-    return this.eventsService.update(id, updateEventDto);
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SaveFormDto) {
+    return this.eventsService.update(id, dto);
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('JWT-auth')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({
-    summary: 'Delete an event',
-    description: 'Permanently deletes an event and all associated submissions',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Event UUID',
-    example: '123e4567-e89b-12d3-a456-426614174000',
-  })
-  @ApiResponse({
-    status: 204,
-    description: 'Event deleted successfully',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - JWT token missing or invalid',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Event not found',
-  })
-  remove(@Param('id') id: string) {
-    return this.eventsService.remove(id);
+  @HttpCode(204)
+  deleteDraft(@Param('id', ParseUUIDPipe) id: string) {
+    return this.eventsService.deleteDraft(id);
   }
+}
 
-  @Get(':id/export')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('JWT-auth')
-  @ApiOperation({
-    summary: 'Export event submissions',
-    description: 'Exports all submissions for an event as an Excel spreadsheet',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Event UUID',
-    example: '123e4567-e89b-12d3-a456-426614174000',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Excel file containing all submissions',
-    content: {
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
-        schema: {
-          type: 'string',
-          format: 'binary',
-        },
-      },
-    },
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - JWT token missing or invalid',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Event not found',
-  })
-  async exportSubmissions(@Param('id') id: string): Promise<StreamableFile> {
-    return this.reportingService.exportEventSubmissions(id);
+@Controller('forms')
+export class PublicFormsController {
+  constructor(private readonly eventsService: EventsService) {}
+
+  @Get(':slug')
+  findBySlug(@Param('slug') slug: string) {
+    return this.eventsService.getPublicForm(slug);
   }
 }

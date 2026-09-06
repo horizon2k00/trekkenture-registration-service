@@ -1,20 +1,34 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
 
-  // Enable CORS for frontend access
+  const corsOrigin = configService.get<string>('CORS_ORIGIN');
+  if (!corsOrigin) {
+    throw new Error('CORS_ORIGIN is required');
+  }
+
   app.enableCors({
-    origin: configService.get<string>('CORS_ORIGIN', '*'),
+    origin: corsOrigin,
     credentials: true,
   });
 
-  // Global validation pipe
+  const httpLogger = new Logger('HTTP');
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    const startedAt = Date.now();
+    response.on('finish', () => {
+      httpLogger.log(
+        `${request.method} ${request.path} ${response.statusCode} ${Date.now() - startedAt}ms`,
+      );
+    });
+    next();
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -23,40 +37,10 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger configuration
-  const config = new DocumentBuilder()
-    .setTitle('Trekkenture Registration API')
-    .setDescription(
-      'API for managing event registrations, submissions, and user authentication for Trekkenture adventures',
-    )
-    .setVersion('1.0')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        name: 'JWT',
-        description: 'Enter JWT token',
-        in: 'header',
-      },
-      'JWT-auth',
-    )
-    .addTag('App', 'Application health and status endpoints')
-    .addTag('Auth', 'Authentication endpoints for admin login')
-    .addTag('Events', 'Event management endpoints')
-    .addTag('Submissions', 'Registration submission endpoints')
-    .build();
-
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-    },
-  });
-
   const port = configService.get<number>('PORT', 3000);
   await app.listen(port);
-  console.log(`Application is running on: http://localhost:${port}`);
-  console.log(`Swagger documentation: http://localhost:${port}/api/docs`);
+  new Logger('Bootstrap').log(
+    `Application is running on http://localhost:${port}`,
+  );
 }
 bootstrap();

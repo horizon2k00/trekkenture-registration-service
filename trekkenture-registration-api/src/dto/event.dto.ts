@@ -1,147 +1,83 @@
+import { Type } from 'class-transformer';
 import {
-  IsString,
-  IsNotEmpty,
+  ArrayMaxSize,
+  ArrayUnique,
   IsArray,
+  IsBoolean,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
-  Min,
+  IsString,
   Matches,
+  Max,
+  MaxLength,
+  Min,
+  ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export class CreateEventDto {
-  @ApiProperty({
-    description: 'Name of the event',
-    example: 'Summer Trek 2026 - Himalayan Adventure',
-  })
+export class SelectedQuestionDto {
   @IsString()
   @IsNotEmpty()
-  name: string;
+  id: string;
 
-  @ApiProperty({
-    description:
-      'URL-friendly slug for the event (lowercase, numbers, hyphens only)',
-    example: 'summer-trek-2026',
-    pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
-  })
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
-    message:
-      'Slug must be a valid URL-friendly string (lowercase, numbers, hyphens only)',
-  })
-  slug: string;
+  @IsBoolean()
+  required: boolean;
 
-  @ApiPropertyOptional({
-    description:
-      'Array of form section identifiers to include in the registration form',
-    example: ['personal-info', 'emergency-contact', 'medical-info'],
-    type: [String],
-  })
   @IsOptional()
   @IsArray()
-  selectedFormSections?: (string | number)[];
-
-  @ApiPropertyOptional({
-    description:
-      'Array of student section identifiers for student-specific forms',
-    example: ['student-id', 'institution'],
-    type: [String],
-  })
-  @IsOptional()
-  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
   @IsString({ each: true })
-  studentSections?: string[];
+  @MaxLength(500, { each: true })
+  options?: string[];
 
-  @ApiProperty({
-    description:
-      'Advance payment amount required for registration (in currency units)',
-    example: 5000,
-    minimum: 0,
-  })
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  advancePayment: number;
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  min?: string | null;
 
-  @ApiProperty({
-    description: 'Total payment amount for the event (in currency units)',
-    example: 15000,
-    minimum: 0,
-  })
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  totalPayment: number;
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  max?: string | null;
 }
 
-export class UpdateEventDto {
-  @ApiPropertyOptional({
-    description: 'Name of the event',
-    example: 'Summer Trek 2026 - Himalayan Adventure',
-  })
-  @IsOptional()
+// Creating and saving a draft both send its complete editable configuration.
+export class SaveFormDto {
   @IsString()
-  @IsNotEmpty()
-  name?: string;
+  @Matches(/\S/)
+  @MaxLength(255)
+  name: string;
 
-  @ApiPropertyOptional({
-    description:
-      'URL-friendly slug for the event (lowercase, numbers, hyphens only)',
-    example: 'summer-trek-2026',
-    pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
-  })
-  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
-    message:
-      'Slug must be a valid URL-friendly string (lowercase, numbers, hyphens only)',
-  })
-  slug?: string;
+  @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  @MaxLength(255)
+  slug: string;
 
-  @ApiPropertyOptional({
-    description:
-      'Array of form section identifiers to include in the registration form',
-    example: ['personal-info', 'emergency-contact', 'medical-info'],
-    type: [String],
-  })
   @IsOptional()
   @IsArray()
-  selectedFormSections?: (string | number)[];
-
-  @ApiPropertyOptional({
-    description:
-      'Array of student section identifiers for student-specific forms',
-    example: ['student-id', 'institution'],
-    type: [String],
-  })
-  @IsOptional()
-  @IsArray()
+  @ArrayMaxSize(200)
+  @ArrayUnique()
   @IsString({ each: true })
-  studentSections?: string[];
+  @IsNotEmpty({ each: true })
+  groupIds?: string[];
 
-  @ApiPropertyOptional({
-    description:
-      'Advance payment amount required for registration (in currency units)',
-    example: 5000,
-    minimum: 0,
-  })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  advancePayment?: number;
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ArrayUnique((question: SelectedQuestionDto) => question?.id)
+  @ValidateNested({ each: true })
+  @Type(() => SelectedQuestionDto)
+  questions: SelectedQuestionDto[];
 
-  @ApiPropertyOptional({
-    description: 'Total payment amount for the event (in currency units)',
-    example: 15000,
-    minimum: 0,
-  })
   @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  totalPayment?: number;
+  @Max(99999999.99)
+  advancePayment?: number | null;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(99999999.99)
+  totalPayment?: number | null;
 }

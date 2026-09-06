@@ -1,12 +1,24 @@
 import {
-  Entity,
-  PrimaryGeneratedColumn,
   Column,
-  OneToMany,
   CreateDateColumn,
+  Entity,
+  OneToMany,
+  PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Submission } from './submission.entity';
+import { FormQuestion, GroupDefinition } from '../questions/question-types';
+
+export enum EventStatus {
+  DRAFT = 'DRAFT',
+  PUBLISHED = 'PUBLISHED',
+  CLOSED = 'CLOSED',
+}
+
+const decimalTransformer = {
+  to: (value: number | null) => value,
+  from: (value: string | null) => (value === null ? null : Number(value)),
+};
 
 @Entity('events')
 export class Event {
@@ -19,24 +31,47 @@ export class Event {
   @Column({ type: 'varchar', length: 255, unique: true })
   slug: string;
 
-  @Column({ type: 'jsonb', nullable: true })
-  selectedFormSections: any[];
+  @Column({ type: 'enum', enum: EventStatus, default: EventStatus.DRAFT })
+  status: EventStatus;
 
-  @Column({ type: 'simple-json', nullable: true })
-  studentSections: any[];
+  @Column({ type: 'jsonb' })
+  questions: FormQuestion[];
 
-  @Column({ type: 'decimal', precision: 10, scale: 2 })
-  advancePayment: number;
+  @Column({ type: 'jsonb' })
+  groups: GroupDefinition[];
 
-  @Column({ type: 'decimal', precision: 10, scale: 2 })
-  totalPayment: number;
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: decimalTransformer,
+  })
+  advancePayment: number | null;
 
-  @CreateDateColumn()
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: decimalTransformer,
+  })
+  totalPayment: number | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  publishedAt: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  closedAt: Date | null;
+
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @OneToMany(() => Submission, (submission) => submission.event)
   submissions: Submission[];
+
+  responseCount?: number;
 }

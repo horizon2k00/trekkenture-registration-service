@@ -1,294 +1,138 @@
 # Trekkenture Registration API
 
-A production-ready NestJS API for event registration management with dynamic forms, submissions, email notifications, and Excel reporting.
+A small NestJS/PostgreSQL service: maintain a question library, build a form, publish it, and collect/export answers.
 
-## Features
+## Start here
 
-- **Event Management**: Full CRUD operations for events with dynamic form sections
-- **Submission Handling**: Public submission endpoint with automatic email confirmation
-- **Authentication**: JWT-based authentication with Passport for admin routes
-- **Email Notifications**: Template-based email system using Handlebars
-- **Excel Reporting**: Export event submissions to Excel with protected endpoints
-- **Database**: TypeORM with PostgreSQL support
+Follow these files in order for a first walkthrough:
 
-## Tech Stack
+1. `questions/questions.controller.ts` and `questions.service.ts`: read and edit the question library.
+2. `events/events.controller.ts` and `events.service.ts`: save drafts and change form status.
+3. `events/form-definition.ts`: copy selected questions into a form, apply required/options/min/max choices, and check publishing readiness. `questions/question-bounds.ts` validates limits for both library questions and saved forms.
+4. `submissions/validate-answers.ts` and `submissions.service.ts`: validate against the saved form and insert one response.
+5. `events/reporting.service.ts`: write saved question headings and answers to Excel.
 
-- **Framework**: NestJS 10
-- **Database**: PostgreSQL with TypeORM
-- **Authentication**: JWT + Passport
-- **Email**: @nestjs-modules/mailer with Nodemailer
-- **Excel**: ExcelJS
-- **Validation**: class-validator & class-transformer
+All paths above are inside `src/`. Controllers handle HTTP, services handle database work, and the two plain validation/configuration files have no database dependency. There is no generic form engine or catalog version system.
 
-## Installation
+## Database: four tables
 
-```bash
-# Install dependencies
-npm install
+| Table | What it holds |
+| --- | --- |
+| `question_groups` | `id`, `name`, and optional explanatory `description`. |
+| `questions` | `id`, `groupId` (foreign key), question wording, field/answer types, default options, and optional min/max. |
+| `events` | A form's name, unique slug, status, saved `questions` and `groups`, optional payment amounts, and timestamps. |
+| `submissions` | `eventId` (foreign key), an `answers` object keyed by question ID, and submission time. |
 
-# Copy environment file
-cp .env.example .env
+`events` keeps its existing table/class name; each event is one registration form.
 
-# Update .env with your configuration
+The library is reusable starting content. A saved form owns a copy of its questions and group descriptions. Required flags, option overrides and number/date limits belong to that copy. Editing or deleting library items never silently changes existing forms, submissions, or export headings. Saving an existing draft retains its selected copies. To use a revised library question in that draft, remove it, save, then add it again.
+
+The form copies and answers are JSONB because each form has a different set of questions. Everything needed to render and validate one form is visible in its row. There are no per-answer tables or schema joins to reconstruct a response. Deleting a group containing questions returns 409; move or delete those questions first. Deleting a library question leaves saved form copies intact.
+
+The migration seeds the original four groups (terms, student, parent, payment) and 17 questions into the database. The terms and important notes are retained as the terms group's description. Library records are editable, with one fixed minimum: the built-in `payment` group and its `payment.utr` text/string question cannot be deleted or separated. Their labels remain editable, and additional payment questions use ordinary CRUD.
+
+## Question types
+
+| Field type | Answer stored | Configuration |
+| --- | --- | --- |
+| `text` | String or number | `answerType`: string, number, date, email, or phone. |
+| `dropdown`, `radio` | One option string | Default options, editable per form. |
+| `checkbox` | Boolean | Checked stores `true`, unchecked stores `false`; required means checked. No options. |
+
+Only number and date text answers have optional `min`/`max`. Bounds are stored as strings (for example `"5"` or `"2026-09-05"`); validation compares numbers numerically and ISO dates chronologically. A number answer must be a JSON number; a string answer must be a JSON string. Numeric-looking text is valid for string answers. Dates must be real `YYYY-MM-DD` dates. Email uses basic syntax validation; phone requires ten digits, allowing formatting punctuation. Empty optional answers are omitted, except optional checkboxes always store `false` when unchecked or omitted. Explicit checkbox answers must be booleans; null, strings, numbers, and arrays are rejected. Older stored array answers remain readable and exportable.
+
+## Form flow
+
+```text
+Question library -> Save draft -> Publish -> Public answers -> Responses / Excel
+                                    |
+                                 Close <-> Reopen
 ```
 
-## Configuration
+Drafts may be incomplete, including added groups without questions, and are hidden publicly. Publishing requires at least one question in every selected group, options for dropdown/radio questions, and both payment amounts if the Payment group is selected. Only drafts can be edited. Closed forms show a closed notice and reject submissions. Reopening checks the same publishing rules and preserves the same form.
 
-Update the `.env` file with your settings:
+For number/date questions, optional `min` and `max` overrides use strings. Omit a limit to retain the saved value (or library default on first selection); send null to remove it. Numeric limits must be finite, date limits must be real ISO dates, and minimum cannot exceed maximum. Overrides are stored only in the form snapshot and used by public answer validation.
 
-```env
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=postgres
-DB_PASSWORD=your-password
-DB_NAME=trekkenture
-
-# JWT
-JWT_SECRET=your-strong-secret-key
-
-# Admin Credentials
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=secure-password
-
-# SMTP (for Gmail, enable 2FA and use App Password)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
-SMTP_PASS=your-app-password
-```
-
-## Database Setup
-
-```bash
-# Make sure PostgreSQL is running
-# Create database
-psql -U postgres
-CREATE DATABASE trekkenture;
-\q
-
-# The application will auto-sync tables in development mode
-```
-
-## Running the Application
-
-```bash
-# Development
-npm run start:dev
-
-# Production build
-npm run build
-npm run start:prod
-```
-
-## API Endpoints
-
-### Authentication
-
-- **POST** `/auth/login` - Admin login
-  ```json
-  {
-    "username": "admin",
-    "password": "admin123"
-  }
-  ```
-
-### Events (Public: GET, Protected: POST/PATCH/DELETE)
-
-- **GET** `/events` - Get all events
-- **GET** `/events/:slug` - Get event by slug (public - for form display)
-- **POST** `/events` - Create event (requires JWT)
-- **PATCH** `/events/:id` - Update event (requires JWT)
-- **DELETE** `/events/:id` - Delete event (requires JWT)
-- **GET** `/events/:id/export` - Export submissions to Excel (requires JWT)
-
-#### Create Event Example:
+Example create/save body:
 
 ```json
 {
-  "name": "Mountain Trek 2025",
-  "slug": "mountain-trek-2025",
-  "selectedFormSections": ["personal", "emergency", "medical"],
-  "studentSections": ["School Name", "Grade"],
-  "advancePayment": 5000.0,
-  "totalPayment": 15000.0
+  "name": "Forest camp",
+  "slug": "forest-camp",
+  "groupIds": ["student"],
+  "questions": [
+    { "id": "student.fullName", "required": true },
+    { "id": "student.age", "required": true, "min": "10", "max": null },
+    { "id": "student.section", "required": false, "options": ["A", "B", "Visitors"] }
+  ],
+  "advancePayment": null,
+  "totalPayment": null
 }
 ```
 
-### Submissions (Public)
+The API resolves those IDs to complete saved question and group definitions. Both create and draft-save requests send the complete editable configuration. `groupIds` defines the group order, saved in the existing `events.groups` JSON array; no separate ordering table or column is needed. Every selected question must belong to a selected group. Questions keep their selection order within each group. Public forms, response tables, and exports all use that order. Older clients can omit `groupIds` to infer groups from the first appearance of their questions.
 
-- **POST** `/submissions` - Submit registration form
-  ```json
-  {
-    "eventId": "uuid-of-event",
-    "email": "user@example.com",
-    "formData": {
-      "name": "John Doe",
-      "phone": "1234567890",
-      "age": 25,
-      "emergencyContact": "Jane Doe"
-    }
-  }
-  ```
+Payment is optional as a whole group. Selecting any question in `payment` requires `payment.utr` to be included with `required: true`; other payment questions are optional selections. Advance and total amounts remain simple columns on `events`, configured by the admin and displayed alongside UPI instructions inside Payment. Drafts can leave amounts blank; publishing or reopening requires both amounts and a configured UPI_ID. Removing Payment removes all its questions and sets both amounts to null. The app records the transaction number; it does not verify payment with a gateway.
 
-## Project Structure
+Draft saves, status changes, and submissions lock the same form row inside their database transaction. This keeps a concurrent save from changing a just-published form and prevents new responses after closing. This is the one concurrency safeguard worth retaining here.
 
-```
-src/
-├── auth/                   # Authentication module
-│   ├── auth.controller.ts  # Login endpoint
-│   ├── auth.service.ts     # Auth logic
-│   ├── jwt.strategy.ts     # JWT strategy
-│   └── jwt-auth.guard.ts   # Auth guard
-├── dto/                    # Data Transfer Objects
-│   ├── event.dto.ts        # Event DTOs with validation
-│   ├── submission.dto.ts   # Submission DTO
-│   └── login.dto.ts        # Login DTO
-├── email/                  # Email module
-│   ├── email.service.ts    # Email sending logic
-│   └── email.module.ts     # Mailer configuration
-├── entities/               # TypeORM entities
-│   ├── event.entity.ts     # Event entity
-│   └── submission.entity.ts # Submission entity
-├── events/                 # Events module
-│   ├── events.controller.ts # Events CRUD + export
-│   ├── events.service.ts    # Events business logic
-│   ├── reporting.service.ts # Excel export logic
-│   └── events.module.ts
-├── submissions/            # Submissions module
-│   ├── submissions.controller.ts
-│   ├── submissions.service.ts
-│   └── submissions.module.ts
-├── app.module.ts          # Root module with TypeORM config
-└── main.ts                # Application entry point
+`DELETE /admin/forms/:id` permanently removes a draft and returns 204. Missing forms return 404; published and closed forms return 409. Deletion takes the same row lock as publishing/saving so a draft cannot be deleted after a concurrent publish. Deleting a draft frees its public slug and leaves the question library intact.
 
-templates/
-└── thank-you.hbs          # Email template
+## Local setup
+
+Copy `.env.example` to the ignored `.env`. Set database credentials, `JWT_SECRET`, and `ADMIN_PASSWORD`. The username defaults to `admin`.
+
+`ADMIN_PASSWORD` is intentionally the original readable password for local debugging. At startup the API derives an in-memory scrypt hash with a random salt; login derives and compares hashes using a constant-time comparison. No hash-generation command or second password setting is needed. Existing plain-text `ADMIN_PASSWORD_HASH` settings should be renamed to `ADMIN_PASSWORD`.
+
+```powershell
+npm install
+npm run migration:run
+npm run start:dev
 ```
 
-## Security Notes
+Create the PostgreSQL database named by `DB_NAME` first. The API defaults to port 3000. TypeORM synchronization is disabled. `database.config.ts` supplies the same connection/entity configuration to the API and migration CLI.
 
-1. **Environment Variables**: Never commit `.env` file
-2. **JWT Secret**: Use a strong random string in production
-3. **Database**: Use strong credentials
-4. **SMTP**: Use app-specific passwords, not your main password
-5. **CORS**: Configure specific origins in production
+`src/migrations/1788652800000-InitialSchema.ts` is the single initial migration. It creates the current four-table schema directly and inserts the four default groups and 17 questions. TypeORM records it in the small `migrations` table, so running `npm run migration:run` again leaves existing data unchanged. This baseline replaces the old development migrations and requires a fresh database; it does not upgrade an older schema. `npm run migration:revert` removes all four application tables and their data.
 
-## Development Tips
+| Environment | Purpose |
+| --- | --- |
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | PostgreSQL connection. |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Single administrator login. |
+| `JWT_SECRET`, `JWT_EXPIRES_IN` | Signing secret and session duration (default 8 hours). |
+| `UPI_ID`, `UPI_PAYEE_NAME`, `UPI_CURRENCY` | Payment instructions. |
+| `SMTP_*` | Optional confirmation email; leave blank to disable. |
+| `PORT`, `CORS_ORIGIN`, `DB_LOGGING` | HTTP configuration and optional SQL logging. |
 
-### Testing Authentication
+Optional confirmation emails retain the existing parent/student email convention. They run after the response is committed; delivery failure does not lose the registration. Application logs omit credentials and answer payloads.
 
-```bash
-# Login to get token
-curl -X POST http://localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
+## Routes
 
-# Use token in protected routes
-curl -X POST http://localhost:3000/events \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Test Event",...}'
+All `/admin/*` routes require `Authorization: Bearer <token>`.
+
+| Method | Route | Action |
+| --- | --- | --- |
+| POST | `/auth/login` | Username/password to JWT. |
+| GET | `/admin/form-catalog` | Database groups and questions. |
+| POST | `/admin/question-groups`, `/admin/questions` | Create a library item. |
+| PUT, DELETE | `/admin/question-groups/:id`, `/admin/questions/:id` | Replace/delete a library item. |
+| GET, POST | `/admin/forms` | List forms / create draft. Optional GET status filter. |
+| GET | `/admin/forms/payment-settings` | Read UPI display settings for admin previews; same settings as public forms. |
+| GET, PATCH | `/admin/forms/:id` | Read / save a complete draft configuration. |
+| POST | `/admin/forms/:id/publish`, `/close`, `/reopen` | Change form status. |
+| GET | `/admin/forms/:id/submissions` | Read responses. |
+| GET | `/admin/forms/:id/submissions/export` | Download XLSX. |
+| GET | `/forms/:slug` | Read public form or closed notice. |
+| POST | `/forms/:slug/submissions` | Validate and store `{ "answers": { ... } }`. |
+
+## Verification
+
+Compile before running tests:
+
+```powershell
+npm run build
+npx tsc --noEmit --incremental false
+npm test -- --runInBand
+npm run test:e2e -- --runInBand
 ```
 
-### Email Testing
-
-For development, you can use:
-
-- **Gmail**: Enable 2FA and create an App Password
-- **Mailtrap**: Free testing service
-- **SendGrid**: Production email service
-
-## Production Deployment
-
-1. Set `NODE_ENV=production` in `.env`
-2. Disable TypeORM `synchronize` (set to `false`)
-3. Use migrations for database changes
-4. Configure proper CORS origins
-5. Use environment-specific configs
-6. Enable HTTPS
-7. Set up proper logging
-
-## License
-
-UNLICENSED
-
-    <p align="center">
-
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-<a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-<a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-<a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
-```
-
-## Compile and run the project
-
-```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
-```
-
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+The E2E suite uses the configured PostgreSQL connection to create a uniquely named temporary database, runs migrations, supplies its own admin credentials, and drops only that temporary database afterward. The database user needs permission to create databases. It never clears your application database and disables SMTP.
