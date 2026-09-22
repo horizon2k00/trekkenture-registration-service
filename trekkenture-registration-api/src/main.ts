@@ -8,15 +8,24 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
 
-  const corsOrigin = configService.get<string>('CORS_ORIGIN');
-  if (!corsOrigin) {
-    throw new Error('CORS_ORIGIN is required');
+  const rawCorsOrigin = configService.get<string>('CORS_ORIGIN');
+  const corsOrigin = rawCorsOrigin?.trim();
+  if (!corsOrigin || corsOrigin === '*') {
+    // Test deployment: allow any origin. Bearer auth is used (no cookies),
+    // so credentials are not needed. `origin: true` reflects the request
+    // origin, which is equivalent to `*` without credentials.
+    app.enableCors({ origin: true, credentials: false });
+  } else {
+    // Comma-separated allowlist, e.g. "https://trekkenture.in,http://localhost:3001"
+    const origins = corsOrigin
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+    app.enableCors({
+      origin: origins.length === 1 ? origins[0] : origins,
+      credentials: true,
+    });
   }
-
-  app.enableCors({
-    origin: corsOrigin,
-    credentials: true,
-  });
 
   const httpLogger = new Logger('HTTP');
   app.use((request: Request, response: Response, next: NextFunction) => {
